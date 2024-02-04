@@ -4,10 +4,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.common.exceptions import StaleElementReferenceException
 import time
 import string
 import os
 import random
+import json
 
 EMAIL = os.environ["EMAIL"]
 PASSWORD = os.environ["PASSWORD"]
@@ -26,7 +28,7 @@ class Slnm:
             service=ChromeService(ChromeDriverManager().install()))
         self.driver.get(url)
 
-        self.driver.implicitly_wait(5)
+        self.driver.implicitly_wait(3)
 
         # uncomment to speed up
         # login
@@ -39,19 +41,52 @@ class Slnm:
 
     def random_id(self):
         return ''.join(random.choices(alphabet, k=8))
+    
+    def check_for_form_errors(self) -> str | None:
+        inputs = self.driver.find_elements(By.TAG_NAME, 'input')
+        selects = self.driver.find_elements(By.TAG_NAME, 'select')
+
+        # filter disabled inputs
+        inputs = [i for i in inputs if not i.get_attribute('disabled')]
+        # filter empty selects
+        selects = [s for s in selects if s.find_elements(
+            By.TAG_NAME, 'option')]
+        
+        # check for errors
+        for i in inputs:
+            if i.get_attribute('errortext'):
+                return f'input {i.get_attribute("name")} has an error: {i.get_attribute("errortext")}'
+    
+    def cleaned_page_body(self) -> str:
+        print(self.driver.find_element(By.TAG_NAME, 'body').text.strip())
+        return self.driver.find_element(By.TAG_NAME, 'body').text.strip()
 
     def current_path(self) -> str:
         return self.driver.current_url
 
     def format_option(self, option: WebElement) -> str:
-        return f"value: {option.get_attribute('value')}, text: {option.text}"
+        return json.dumps(self.remove_empty({
+            "value": option.get_attribute('value'),
+            "text": option.text
+        }), separators=(',', ':'))
+        # return f"value: {option.get_attribute('value')}, text: {option.text}"
+    
+    def remove_empty(self, d: dict) -> dict:
+        return {k: v for k, v in d.items() if v}
 
     def format_input(self, input: WebElement) -> str:
         name = input.get_attribute('name')
         type = input.get_attribute('type')
         autocomplete = input.get_attribute('autocomplete')
+        errors = input.get_attribute('errortext')
         value = input.get_attribute('value')
-        return f"name: {name}, type: {autocomplete if type == 'text' else type}, current_value: {value}"
+        return json.dumps(self.remove_empty({
+            "target_id": name,
+            "type": autocomplete if type == 'text' else type,
+            "current_value": value,
+            "errors": errors
+        }), separators=(',', ':'))
+        # return f"target_id: {name}, type: {autocomplete if type == 'text' else type}, current_value: {value}{', errors: ' + errors if errors else ''}"
 
     def format_a_href(self, a: WebElement) -> str:
         href = a.get_attribute('href').split('?')[0]
@@ -61,12 +96,24 @@ class Slnm:
         if not id and not text:
             None
         # omit empty id, text
-        if not id:
-            return f"href: {href}, text: {text}"
-        if not text:
-            return f"href: {href}, id: {id}"
-
-        return f"href: {href}, id: {id}, text: {text}"
+        return json.dumps(self.remove_empty({
+            "id": id,
+            "text": text,
+            "href": href
+        }), separators=(',', ':'))
+    
+    def format_select_input(self, select: WebElement) -> str:
+        name = select.get_attribute('name')
+        type = select.get_attribute('type')
+        current_value = select.get_attribute('value')
+        options = select.find_elements(By.TAG_NAME, 'option')
+        return json.dumps(self.remove_empty({
+            "target_id": name,
+            "type": type,
+            "current_value": current_value,
+            "options": [self.format_option(o) for o in options]
+        }), separators=(',', ':'))
+        # return f"target_id: {name}, type: {type}, current_value: {current_value}, options: {', '.join([self.format_option(o) for o in options])}"
 
     def get_inputs(self) -> list[str]:
         selects = self.driver.find_elements(By.TAG_NAME, 'select')
@@ -78,10 +125,10 @@ class Slnm:
         selects = [s for s in selects if s.find_elements(
             By.TAG_NAME, 'option')]
 
-        slcts_with_options = [
-            f"name: \"{s.get_attribute('name')}\", type: {s.get_attribute('type')}, current_value: {s.get_attribute('value')}, options: {', '.join([self.format_option(o) for o in s.find_elements(By.TAG_NAME, 'option')])}" for s in selects]
-        print('get_inputs', slcts_with_options)
-        return [self.format_input(i) for i in inputs] + slcts_with_options
+        # slcts_with_options = [
+        #     f"target_id: \"{s.get_attribute('name')}\", type: {s.get_attribute('type')}, current_value: {s.get_attribute('value')}, options: {', '.join([self.format_option(o) for o in s.find_elements(By.TAG_NAME, 'option')])}" for s in selects]
+        
+        return [self.format_input(i) for i in inputs] + [self.format_select_input(s) for s in selects]
 
     def get_links(self) -> list[str]:
         links = self.driver.find_elements(By.TAG_NAME, 'a')
@@ -95,17 +142,21 @@ class Slnm:
         if len(buttons) == 0:
             # try looking for divs with role=button
             maybe_buttons = self.driver.find_elements(By.TAG_NAME, 'div')
-            maybe_buttons = [
+            buttons = [
                 b for b in maybe_buttons if b.get_attribute('role') == 'button']
-            # now give them all unique names
-            for b in maybe_buttons:
+            
+        # now give them all unique names (if they don't have one already)
+        for b in buttons:
+            if not b.get_attribute('name'):
                 self.driver.execute_script(
                     "arguments[0].setAttribute('name',arguments[1])", b, self.random_id())
 
-            return [f"name: {b.get_attribute('name')} text: {b.text}" for b in maybe_buttons]
-
         # get name or inner text of button
-        return [f"name: {b.get_attribute('name')}, text: {b.text}" for b in buttons]
+        return [json.dumps(self.remove_empty({
+            "target_id": b.get_attribute('name'),
+            "text": b.text
+        }), separators=(',', ':')) for b in buttons]
+        # return [f"target_id: {b.get_attribute('name')}, text: {b.text}" for b in buttons]
 
     def click_link(self, path: str) -> str | None:
         links = self.driver.find_elements(By.TAG_NAME, 'a')
@@ -117,24 +168,30 @@ class Slnm:
         return f'link {path} not found'
 
     def click_button(self, button: str) -> str | None:
-        buttons = self.driver.find_elements(By.TAG_NAME, 'button')
-        for b in buttons:
-            if b.text.lower().strip() == button.lower().strip():
-                b.click()
-                return None
+        try:
+            buttons = self.driver.find_elements(By.TAG_NAME, 'button')
+            div_buttons = self.driver.find_elements(By.TAG_NAME, 'div')
+            # filter by role
+            div_buttons = [b for b in div_buttons if b.get_attribute('role') == 'button']
+            buttons = buttons + div_buttons
+            
+            for b in buttons:
+                if b.text.lower().strip() == button.lower().strip():
+                    b.click()
+                    return None
+                if b.get_attribute('name') == button:
+                    b.click()
+                    return None
+            
+            return f'button {button} not found'
+        except StaleElementReferenceException as e:
+            return self.click_button(button)
 
-        for b in self.driver.find_elements(By.TAG_NAME, 'div'):
-            if b.get_attribute('name') == button:
-                b.click()
-                return None
-        return f'button {button} not found'
-
-    def edit_input(self, name: str, value: str) -> str | None:
-        print(name, value)
+    def edit_input(self, target_id: str, value: str) -> str | None:
         # check if input is a select
         selects = self.driver.find_elements(By.TAG_NAME, 'select')
         for s in selects:
-            if s.get_attribute('name') == name:
+            if s.get_attribute('name') == target_id:
                 # try to find the option
                 # o = s.find_element(By.XPATH, f"//option[text()='{value}']")
                 options = s.find_elements(By.TAG_NAME, 'option')
@@ -155,30 +212,22 @@ class Slnm:
         all_inputs = self.driver.find_elements(By.TAG_NAME, 'input')
 
         for i in all_inputs:
-            if i.get_attribute('name') == name:
+            if i.get_attribute('name') == target_id:
                 i.send_keys(value)
                 return None
 
-        return f'No input with name {name} found'
+        return f'No input with name {target_id} found'
 
     def format_message_for_llm(self) -> str:
-        time.sleep(2)
+        time.sleep(1)
+        links = self.get_links()
         content = f'''
 The current path is: {self.current_path()}
-The available navigatable paths are: {', '.join(self.get_links())}
+{'The available navigatable paths are: ' if links else ''}{', '.join(links)}
 The available clickable buttons are: {', '.join(self.get_buttons())}
 The available inputs are: {', '.join(self.get_inputs())}
 
 You can do NOTHING except what is listed above.
-
-Format your response as JSON in the following format:
-{{
-    "action": "click" | "navigate" | "input",
-    "target": "element name" | "path",
-    "value": "input value" // optional
-}}
-
-If you are done, simply respond with "done"
 '''.strip()
 
         print(content)
