@@ -6,9 +6,9 @@ import json
 
 # pull in .env
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-
+from olma import Ollama
 from slnm import Slnm
 
 load_dotenv()
@@ -18,7 +18,8 @@ EMAIL = os.environ["EMAIL"]
 PASSWORD = os.environ["PASSWORD"]
 SITE = os.environ["SITE"]
 
-llm = OpenAI(api_key=OPEN_AI_API_KEY)
+llm = Ollama()
+# llm = OpenAI(api_key=OPEN_AI_API_KEY)
 
 slnm = Slnm(SITE)
 
@@ -69,9 +70,12 @@ while True:
         'role': 'assistant'
     })
 
-    action = LLMAction.model_validate(
-        json.loads(response.choices[0].message.content.strip()))
-
+    try:
+        action = LLMAction.model_validate(
+            json.loads(response.choices[0].message.content.strip()))
+    except ValidationError as e:
+        ctx = str(e)
+        continue
     if action.action == 'done':
         break
 
@@ -83,6 +87,8 @@ while True:
     elif action.action == 'navigate':
         ctx = slnm.click_link(action.target)
     elif action.action == 'input':
+        if not action.value:
+            raise ValueError('input action must have a value')
         ctx = slnm.edit_input(action.target, action.value)
 
 

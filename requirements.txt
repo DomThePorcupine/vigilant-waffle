@@ -1,3 +1,5 @@
 openai
 selenium
 webdriver-manager
+ollama
+python-dotenv
