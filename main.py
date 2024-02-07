@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
 from olma import Ollama
-from slnm import Slnm
+from slnm import Slnm, SlnmOptions
 
 load_dotenv()
 
@@ -21,23 +21,29 @@ SITE = os.environ["SITE"]
 # llm = Ollama()
 llm = OpenAI(api_key=OPEN_AI_API_KEY)
 
-slnm = Slnm(SITE)
+slnm = Slnm(SITE, SlnmOptions(disable_href=True))
 
 all_messages = [
     {
         'content': f'''
 You are helping a user naviagte a website. 
-Their ultimate goal is to create a new region on the website.
+Their ultimate goal is find the cheapest flight prices between SEA and PIT.
 They will describe the state of the website, your job is to respond with the best action.
 
 Here is the info for the form:
-the name of the region should be "Test Region 34"
+
+from airport: SEA
+to airport: PIT
+
+departure date: 03/03/2024
+return date: 03/10/2024
 
 Format your responses as JSON in the format:
 {{
     "action": "click" | "navigate" | "input" | "done" | "read_page",
     "target": "target_id" | "path_to_navigate_to", // optional ONLY for done and read_page
     "value": "input value" // optional
+    "answer": "your answer (example the cheapest flight is $xxx)" // optional only allowed with done
 }}
 
 Example: To click the "Foo" button in: {{ "target_id": "twmzk30b", "text": "Foo" }} respond with:
